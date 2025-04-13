@@ -2,7 +2,7 @@ import Foundation
 import RealityKit
 
 /// Entity data structure containing the Entity and its related information
-public struct EntityData: Identifiable {
+public struct EntityData: Identifiable, @unchecked Sendable {
     /// Unique identifier
     public let id: UUID
     /// Entity object

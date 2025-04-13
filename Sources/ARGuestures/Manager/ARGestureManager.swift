@@ -47,19 +47,10 @@ public struct ARGestureInfo {
 /// 手势回调类型
 public typealias ARGestureCallback = (ARGestureInfo) -> Void
 
-/// 位置变化回调类型
-public typealias TransformChangedCallback = (String, Transform) -> Void
-
 /// AR手势管理器，负责管理实体和手势交互
 public class ARGestureManager: ObservableObject {
     /// 活跃的实体列表
     @Published public var entities: [EntityData] = []
-    
-    /// 是否可以放置对象
-    @Published public var placeAble: Bool = false
-    
-    /// 放置位置
-    @Published public var placementPosition: SIMD3<Float>?
     
     /// 调试模式开关
     @Published public var isDebugEnabled: Bool = false
@@ -67,23 +58,11 @@ public class ARGestureManager: ObservableObject {
     /// 实体映射表，用于快速查找
     private var entityMap: [String: EntityData] = [:]
     
-    /// 实体组件映射，用于快速查找手势交互的实体
-    private var entityComponentMap: [Entity: String] = [:]
-    
-    /// 平面锚点映射
-    public var planeAnchorsByID: [UUID: ARMeshAnchor] = [:]
-    
-    /// 平面实体映射
-    public var planeEntities: [UUID: Entity] = [:]
-    
     /// 参考锚点实体
     public var referenceAnchor: Entity?
     
-    /// 放置指示实体
-    public var placementInstructionEntity: Entity?
-    
     /// 变换回调
-    public var onTransformChanged: TransformChangedCallback?
+    public var onTransformChanged: ((String, Transform) -> Void)?
     
     /// 手势回调
     public var onGestureCallback: ARGestureCallback?
@@ -91,15 +70,12 @@ public class ARGestureManager: ObservableObject {
     /// 初始化AR手势管理器
     /// - Parameters:
     ///   - referenceAnchor: 可选参考锚点
-    ///   - placementInstructionEntity: 可选放置指示实体
     ///   - isDebugEnabled: 是否启用调试模式，默认为false
     public init(
         referenceAnchor: Entity? = nil, 
-        placementInstructionEntity: Entity? = nil,
         isDebugEnabled: Bool = false
     ) {
         self.referenceAnchor = referenceAnchor
-        self.placementInstructionEntity = placementInstructionEntity
         self.isDebugEnabled = isDebugEnabled
     }
     
@@ -114,120 +90,52 @@ public class ARGestureManager: ObservableObject {
         entityMap[name] = entityData
         entities.append(entityData)
         
-        // 注册实体及其子级以便快速查找
-        registerEntityHierarchy(entity, name: name)
+        if isDebugEnabled {
+            print("已注册实体: \(name)")
+        }
         
         return entityData
-    }
-    
-    /// 注册实体层级结构，用于快速查找
-    /// - Parameters:
-    ///   - entity: 要注册的实体
-    ///   - name: 实体名称
-    private func registerEntityHierarchy(_ entity: Entity, name: String) {
-        // 首先为主实体创建映射
-        entityComponentMap[entity] = name
-        
-        // 注册子实体
-        if !entity.children.isEmpty {
-            registerChildren(of: entity, name: name)
-        }
-    }
-    
-    /// 递归注册子实体
-    /// - Parameters:
-    ///   - entity: 父实体
-    ///   - name: 主实体名称
-    private func registerChildren(of entity: Entity, name: String) {
-        for child in entity.children {
-            entityComponentMap[child] = name
-            
-            // 递归处理孙子级
-            if !child.children.isEmpty {
-                registerChildren(of: child, name: name)
-            }
-        }
     }
     
     /// 根据交互实体查找主实体
     /// - Parameter interactedEntity: 被交互的实体
     /// - Returns: 找到的实体数据和名称
-    public func findEntityData(from interactedEntity: Entity) -> (EntityData?, String) {
-        // 首先尝试直接在映射表中查找
-        if let entityName = entityComponentMap[interactedEntity] {
-            return (entityMap[entityName], entityName)
-        }
-        
-        // 尝试查找父级
-        var currentEntity: Entity? = interactedEntity
-        while currentEntity != nil {
-            if let name = entityComponentMap[currentEntity!] {
-                return (entityMap[name], name)
-            }
-            currentEntity = currentEntity?.parent
-        }
-        
-        // 如果都找不到，使用旧方法作为后备
+    @MainActor public func findEntityData(from interactedEntity: Entity) -> (EntityData?, String) {
+        // 首先尝试直接匹配
         for entData in entities {
-            let ent = entData.entity
+            let entity = entData.entity
             let name = entData.name
             
             // 检查是否是主实体
-            if ent == interactedEntity {
+            if entity == interactedEntity {
                 return (entData, name)
             }
             
-            // 检查是否是子实体
-            if isEntity(interactedEntity, childOf: ent) {
-                return (entData, name)
-            }
+            var clone = interactedEntity
+            while let parent = clone.parent {
+                if parent == nil {
+                    break
+                }
+                if parent == entity {
+                    return (entData, name)
+                }
+                clone = parent
+            }   
         }
         
         return (nil, "")
     }
     
-    /// 检查一个实体是否是另一个实体的子级
-    /// - Parameters:
-    ///   - potentialChild: 可能的子实体
-    ///   - parent: 可能的父实体
-    /// - Returns: 是否是子级关系
-    private func isEntity(_ potentialChild: Entity, childOf parent: Entity) -> Bool {
-        if parent.children.contains(potentialChild) {
-            return true
-        }
-        
-        for child in parent.children {
-            if isEntity(potentialChild, childOf: child) {
-                return true
-            }
-        }
-        
-        return false
-    }
-    
     /// 移除实体
     /// - Parameter name: 实体名称
     public func removeEntity(named name: String) {
-        if let entityData = entityMap[name] {
-            // 从实体组件映射中移除
-            removeEntityFromComponentMap(entityData.entity)
+        if let index = entities.firstIndex(where: { $0.name == name }) {
+            entities.remove(at: index)
+            entityMap.removeValue(forKey: name)
             
-            // 从实体列表中移除
-            if let index = entities.firstIndex(where: { $0.name == name }) {
-                entities.remove(at: index)
-                entityMap.removeValue(forKey: name)
+            if isDebugEnabled {
+                print("已移除实体: \(name)")
             }
-        }
-    }
-    
-    /// 从组件映射中移除实体及其子实体
-    /// - Parameter entity: 要移除的实体
-    private func removeEntityFromComponentMap(_ entity: Entity) {
-        entityComponentMap.removeValue(forKey: entity)
-        
-        // 递归移除所有子实体
-        for child in entity.children {
-            removeEntityFromComponentMap(child)
         }
     }
     
@@ -236,14 +144,6 @@ public class ARGestureManager: ObservableObject {
     /// - Returns: 实体数据（如果存在）
     public func getEntity(named name: String) -> EntityData? {
         return entityMap[name]
-    }
-    
-    /// 放置对象在指定位置
-    /// - Parameter entity: 要放置的实体
-    public func placeObject(_ entity: Entity) {
-        if let position = placementPosition {
-            entity.setPosition(position, relativeTo: nil)
-        }
     }
     
     /// 发送变换消息
@@ -256,7 +156,7 @@ public class ARGestureManager: ObservableObject {
     
     /// 设置变换回调
     /// - Parameter callback: 回调函数
-    public func setTransformChangedCallback(_ callback: @escaping TransformChangedCallback) {
+    public func setTransformChangedCallback(_ callback: @escaping (String, Transform) -> Void) {
         self.onTransformChanged = callback
     }
     
@@ -264,6 +164,19 @@ public class ARGestureManager: ObservableObject {
     /// - Parameter transform: 原始变换
     /// - Returns: 相对于参考锚点的变换
     public func getRelativeTransform(_ transform: Transform) -> Transform {
+        guard let anchor = referenceAnchor else { return transform }
+        
+        // 在非Main Actor上下文中无法直接调用convert方法，所以返回原始变换
+        // 需要在调用者端使用MainActor包装
+        // 例如: Task { @MainActor in let relativeTransform = anchor.convert(transform: transform, from: nil) }
+        return transform
+    }
+    
+    /// 获取相对变换（异步版本）
+    /// - Parameter transform: 原始变换
+    /// - Returns: 相对于参考锚点的变换
+    @MainActor
+    public func getRelativeTransformAsync(_ transform: Transform) async -> Transform {
         guard let anchor = referenceAnchor else { return transform }
         return anchor.convert(transform: transform, from: nil)
     }
@@ -332,15 +245,4 @@ public class ARGestureManager: ObservableObject {
     public func setDebugEnabled(_ enabled: Bool) {
         self.isDebugEnabled = enabled
     }
-}
-
-/// 平面检测辅助函数
-public func containing(pointToProject: float4x4, _ anchor: ARMeshAnchor) -> Bool {
-    let anchorTLocalPoint = anchor.transformMatrix.inverse * pointToProject
-    let x = anchorTLocalPoint.columns.3.x
-    let z = anchorTLocalPoint.columns.3.z
-    let extent = anchor.geometry.extent
-    
-    // 中心点在原点，边界判断
-    return -extent.x / 2 <= x && x <= extent.x / 2 && -extent.z / 2 <= z && z <= extent.z / 2
 } 

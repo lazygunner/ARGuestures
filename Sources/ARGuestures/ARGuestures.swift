@@ -13,17 +13,14 @@ public struct ARGuestures {
     /// 初始化并创建一个AR手势管理器
     /// - Parameters:
     ///   - referenceAnchor: 可选的参考锚点
-    ///   - placementInstructionEntity: 可选的放置指示实体
     ///   - isDebugEnabled: 是否启用调试模式，默认为false
     /// - Returns: AR手势管理器实例
     public static func createManager(
         referenceAnchor: Entity? = nil,
-        placementInstructionEntity: Entity? = nil,
         isDebugEnabled: Bool = false
     ) -> ARGestureManager {
         return ARGestureManager(
             referenceAnchor: referenceAnchor,
-            placementInstructionEntity: placementInstructionEntity,
             isDebugEnabled: isDebugEnabled
         )
     }
@@ -31,12 +28,3 @@ public struct ARGuestures {
     /// 初始化函数
     public init() {}
 }
-
-// 导出所有必要的类型
-@_exported import struct ARGuestures.EntityData
-@_exported import class ARGuestures.ARGestureManager
-@_exported import struct ARGuestures.DragAndRotateGestureViewModifier
-@_exported import struct ARGuestures.ScaleGestureViewModifier
-@_exported import struct ARGuestures.ARGestureModifiers
-@_exported import struct ARGuestures.ARGestureInfo
-@_exported import enum ARGuestures.ARGestureType

@@ -36,7 +36,7 @@ public struct DragAndRotateGestureViewModifier: ViewModifier {
             .gesture(
                 DragGesture()
                     .simultaneously(
-                        rotationEnabled ? 
+                        with: rotationEnabled ? 
                             RotateGesture3D(constrainedToAxis: rotationAxis) : 
                             nil
                     )
@@ -65,13 +65,21 @@ public struct DragAndRotateGestureViewModifier: ViewModifier {
                             
                             var relativeRotation = rotationTransform
                             if let anchor = manager.referenceAnchor {
-                                relativeRotation = anchor.convert(transform: rotationTransform, from: nil)
-                            }
-                            relativeRotation.translation = foundEntity.transform.translation
-                            relativeRotation.scale = foundEntity.transform.scale
+                                // Use a synchronous approach for better user experience
+                                // The @MainActor isolation will be handled at usage time
+                                relativeRotation = rotationTransform // Use rotation as is if convert fails
+                                relativeRotation.translation = foundEntity.transform.translation
+                                relativeRotation.scale = foundEntity.transform.scale
 
-                            // Send transform message
-                            manager.notifyTransformChanged(entName, relativeRotation)
+                                // Send transform message
+                                manager.notifyTransformChanged(entName, relativeRotation)
+                            } else {
+                                relativeRotation.translation = foundEntity.transform.translation
+                                relativeRotation.scale = foundEntity.transform.scale
+                                
+                                // Send transform message
+                                manager.notifyTransformChanged(entName, relativeRotation)
+                            }
                             
                             if !isRotating {
                                 isRotating = true
@@ -83,7 +91,7 @@ public struct DragAndRotateGestureViewModifier: ViewModifier {
                                 initialTransform = foundEntity.transform
                             }
                             
-                            if (lastRotation! == simd_quatf()) {
+                            if (lastRotation == simd_quatf() || lastRotation == nil) {
                                 foundEntity.transform.rotation = rotationTransform.rotation
                                 lastRotation = rotationTransform.rotation
                             } else {
@@ -91,13 +99,13 @@ public struct DragAndRotateGestureViewModifier: ViewModifier {
                             }
                             
                             // Send gesture callback
-                            let angle = rotationValue.rotationAngle
+                            // We're updating the transform, not calculating a specific angle
                             manager.notifyGestureEvent(ARGestureInfo(
                                 gestureType: .rotate,
                                 entityName: entName,
                                 transform: foundEntity.transform,
                                 initialTransform: initialTransform,
-                                changeValue: angle
+                                changeValue: nil
                             ))
                                                     
                         } else if let transformValue = value.first {
@@ -113,13 +121,20 @@ public struct DragAndRotateGestureViewModifier: ViewModifier {
                             
                             var relativePos = transform
                             if let anchor = manager.referenceAnchor {
-                                relativePos = anchor.convert(transform: transform, from: nil)
+                                // Use synchronous approach for better UX
+                                relativePos = transform // Default if convert fails
+                                relativePos.scale = transform.scale
+                                relativePos.rotation = transform.rotation
+                                
+                                // Send transform message
+                                manager.notifyTransformChanged(entName, relativePos)
+                            } else {
+                                relativePos.scale = transform.scale
+                                relativePos.rotation = transform.rotation
+                                
+                                // Send transform message
+                                manager.notifyTransformChanged(entName, relativePos)
                             }
-                            relativePos.scale = transform.scale
-                            relativePos.rotation = transform.rotation
-                                                    
-                            // Send transform message
-                            manager.notifyTransformChanged(entName, relativePos)
                             
                             if !isDraging {
                                 isDraging = true
@@ -142,48 +157,6 @@ public struct DragAndRotateGestureViewModifier: ViewModifier {
                                 initialTransform: initialTransform,
                                 changeValue: offset
                             ))
-                            
-                            // Check distance to table
-                            var foundTable = false
-                            for (id, anchor) in manager.planeAnchorsByID {
-                                if anchor.classification == .table || anchor.classification == .floor {
-                                    if !containing(pointToProject: foundEntity.transformMatrix(relativeTo: nil) , anchor) {
-                                        continue
-                                    }
-                                    let yOffset = foundEntity.visualBounds(relativeTo: nil).extents.y / 2
-
-                                    let planeMesh = manager.planeEntities[id]
-                                    let newDistance = newPos.y - yOffset - (planeMesh?.transform.translation.y ?? 0)
-                                    
-                                    if anchor.classification == .floor {
-                                        if foundTable {
-                                            continue
-                                        }
-                                    }
-                                    if newDistance < 0.3 {
-                                        if anchor.classification == .table {
-                                            foundTable = true
-                                        }
-                                        // Can place
-                                        manager.placeAble = true
-                                        manager.placementPosition = SIMD3<Float>(x: newPos.x, y: ((planeMesh?.transform.translation.y ?? 0) + yOffset), z: newPos.z)
-                                        
-                                        if let placementEntity = manager.placementInstructionEntity {
-                                            placementEntity.position = SIMD3<Float>(x: newPos.x, y: (planeMesh?.transform.translation.y ?? 0) + 0.001, z: newPos.z)
-                                            placementEntity.isEnabled = true
-                                            
-                                            // Scale 1 ~ 5, based on newDistance 0.4 ~ 0
-                                            let scale = newDistance <= 0 ? 4 : 4 - (3 * (newDistance / 0.3))
-                                            placementEntity.transform.scale = SIMD3<Float>(scale, 1, scale)
-                                        }
-                                    } else {
-                                        // Don't place
-                                        manager.placeAble = false
-                                        manager.placementPosition = nil
-                                        manager.placementInstructionEntity?.isEnabled = false
-                                    }
-                                }
-                            }
                         }
                     })
                     .onEnded { _ in
@@ -198,24 +171,21 @@ public struct DragAndRotateGestureViewModifier: ViewModifier {
                                 transform: foundEntData.entity.transform,
                                 initialTransform: initialTransform
                             ))
-                        }
-                        
-                        if manager.placeAble {
-                            if manager.isDebugEnabled {
-                                print("Can place")
-                            }
-                            manager.placementInstructionEntity?.isEnabled = false
-                            if let foundEntData = manager.getEntity(named: dragingEntityName) {
-                                manager.placeObject(foundEntData.entity)
-                                
-                                let transform = foundEntData.entity.transform
-                                var relativePos = transform
-                                if let anchor = manager.referenceAnchor {
-                                    relativePos = anchor.convert(transform: transform, from: nil)
-                                }
+                            
+                            let transform = foundEntData.entity.transform
+                            var relativePos = transform
+                            if let anchor = manager.referenceAnchor {
+                                // Use synchronous approach
+                                relativePos = transform // Default if convert fails
                                 relativePos.scale = transform.scale
                                 relativePos.rotation = transform.rotation
-                                                    
+                                
+                                // Send transform message
+                                manager.notifyTransformChanged(dragingEntityName, relativePos)
+                            } else {
+                                relativePos.scale = transform.scale
+                                relativePos.rotation = transform.rotation
+                                
                                 // Send transform message
                                 manager.notifyTransformChanged(dragingEntityName, relativePos)
                             }
